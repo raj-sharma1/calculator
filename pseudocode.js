@@ -3,11 +3,11 @@
 
 //create an Html page for the calculator.
 //assign the <div> element for generic flow of content
-//create class and id attribute for calculator, freecodecamp and electronic calculator
+//create class attribute for calculator, id attribute title for freecodecamp and id attribute for tagline electronic calculator
 //input element for text
 //create row and assign class element to all the row
 // create button for AC and CE and name a different class but should be the same for both of them
-//create button for %, divide
+//create button for %, /
 //create another row for 7,8,9,x button
 //create another row for 4,5,6,- button
 //create another row for 1,2,3 and a button class tall for +
