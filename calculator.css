@@ -1,0 +1,117 @@
+form#main{
+	border:2px solid black;
+  width: 340px;
+  text-align: center;
+    height: 350px;
+    border-radius: 10px;
+    display: grid;
+    grid-template-columns: 100%
+    
+}
+
+input#display{
+	width:182px;
+	margin:10px;
+	height:30px;
+  border:2px solid #546E7A;
+  font-size: 30px;
+}
+
+
+input#num7,
+input#num8,
+input#num9,
+input#num6,
+input#num5,
+input#num4,
+input#num3,
+input#num2,
+input#num1,
+input#num0,
+
+input#numdiv,
+input#numsub,
+input#nummul,
+input#numadd,
+input#nummod,
+input#numdec
+ {
+  background:  #FF8E53;
+  border-radius: 5px;
+  border: 1px solid black;
+  color: white;
+  width: 45px;
+  height: 45px;
+  font-size: 22px;
+  padding: 0px;
+  box-shadow: 0 3px 5px 2px rgba(255, 105, 135, .30);
+  margin: 0px 0px 10px 5px;
+  cursor: pointer;
+  text-align: center;
+    
+}
+
+input#numback{
+  background-color: red;
+	border-radius: 5px;
+  border: 1px solid black;
+  color: white;
+  width: 45px;
+  height: 45px;
+  font-size: 22px;
+  padding: 0px;
+  box-shadow: 0 3px 5px 2px rgba(255, 105, 135, .30);
+  margin: 0px 0px 10px 5px;
+  cursor: pointer;
+  text-align: center;
+}
+
+input#numclear{
+	
+	background-color:#E57373;
+	border:2px solid #546E7A;
+	border-radius: 5px;
+  color: white;
+  width: 45px;
+  height: 45px;
+  font-size: 22px;
+  padding: 0px;
+  box-shadow: 0 3px 5px 2px rgba(255, 105, 135, .30);
+  margin: 0px 0px 10px 5px;
+  cursor: pointer;
+  text-align: center;
+}
+
+input#numequal {
+  background-color:#E57373;
+	border:2px solid #546E7A;
+	border-radius: 5px;
+  color: white;
+  width: 98px;
+  height: 45px;
+  font-size: 22px;
+  padding: 0px;
+  box-shadow: 0 3px 5px 2px rgba(255, 105, 135, .30);
+  margin: 0px 0px 10px 5px;
+  cursor: pointer;
+  text-align: center;
+}
+
+div#subdiv{
+	margin-left:10px;
+  margin-right:10px;
+}
+
+h1 {
+	text-align: center;
+}
+
+h2 {
+  text-align: center;
+  font-size: 15px;
+}
+
+form{
+  margin: 0 auto;
+  text-align: center;
+}
