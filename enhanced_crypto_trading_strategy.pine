@@ -1,0 +1,418 @@
+//@version=6
+strategy("Advanced Crypto Trading Strategy - Professional Edition",
+     overlay=true,
+     max_bars_back=5000,
+     initial_capital=10000,
+     commission_type=strategy.commission.percent, 
+     commission_value=0.06,
+     default_qty_type=strategy.percent_of_equity, 
+     default_qty_value=10,
+     pyramiding=1, 
+     calc_on_every_tick=false, 
+     calc_on_order_fills=true,
+     close_entries_rule="ANY")
+
+// ======= Enhanced Inputs =======
+groupGen   = "General Settings"
+dirOpt     = input.string("Both", "Allowed Direction", options=["Both","Longs only","Shorts only"], group=groupGen)
+freqPreset = input.string("Balanced", "Trading Style", options=["Conservative","Balanced","Aggressive","Scalp","Professional"], group=groupGen)
+alwaysIn   = input.bool(true, "Always in Market (Flip on opposite signal)", group=groupGen)
+useTrailing = input.bool(true, "Use Trailing Stop Loss", group=groupGen)
+
+groupTF    = "Trend Analysis"
+htf_tf     = input.timeframe("240", "Higher Timeframe for Trend", group=groupTF)
+emaFastLen = input.int(21,  "EMA Fast",  minval=2, group=groupTF)
+emaSlowLen = input.int(55,  "EMA Slow",  minval=5, group=groupTF)
+emaLongLen = input.int(200, "EMA Long",  minval=20, group=groupTF)
+emaVeryLong = input.int(400, "EMA Very Long", minval=50, group=groupTF)
+
+groupVol   = "Volume & Momentum"
+adxLen     = input.int(14,  "ADX Length", minval=3, group=groupVol)
+adxMin     = input.float(20, "Min ADX for Strength", minval=0, step=0.5, group=groupVol)
+useVolFlt  = input.bool(true, "Volume Filter", group=groupVol)
+volLen     = input.int(20,  "Volume SMA Length", minval=2, group=groupVol)
+volMultiplier = input.float(1.2, "Volume Multiplier", minval=0.5, step=0.1, group=groupVol)
+
+groupSig   = "Signal Generation"
+// Mean Reversion
+useMR      = input.bool(true,  "Mean Reversion (BB + RSI + Stochastic)", group=groupSig)
+bbLen      = input.int(20,  "Bollinger Bands Length", minval=5, group=groupSig)
+bbMult     = input.float(2.0, "BB Standard Deviation",  minval=0.5, step=0.1, group=groupSig)
+rsiLen     = input.int(14,  "RSI Length", minval=2, group=groupSig)
+rsiOB      = input.int(75,  "RSI Overbought",    minval=51, maxval=90, group=groupSig)
+rsiOS      = input.int(25,  "RSI Oversold",      minval=10, maxval=49, group=groupSig)
+
+// Trend Following
+useTF      = input.bool(true,  "Trend Following (EMA + MACD)", group=groupSig)
+macdFast   = input.int(12,  "MACD Fast", minval=5, group=groupSig)
+macdSlow   = input.int(26,  "MACD Slow", minval=10, group=groupSig)
+macdSignal = input.int(9,   "MACD Signal", minval=5, group=groupSig)
+
+// Additional Indicators
+useStoch   = input.bool(true,  "Stochastic Oscillator", group=groupSig)
+stochK     = input.int(14,  "Stochastic %K", minval=5, group=groupSig)
+stochD     = input.int(3,   "Stochastic %D", minval=2, group=groupSig)
+stochOB    = input.int(80,  "Stochastic Overbought", minval=70, group=groupSig)
+stochOS    = input.int(20,  "Stochastic Oversold", maxval=30, group=groupSig)
+
+useWilliams = input.bool(true, "Williams %R", group=groupSig)
+williamsLen = input.int(14, "Williams %R Length", minval=5, group=groupSig)
+
+groupFlow  = "Flow Controls"
+cooldown   = input.int(3,  "Min bars between entries", minval=0, group=groupFlow)
+reenterOnFlip = input.bool(true, "Reverse on opposite signal", group=groupFlow)
+maxTradesPerDay = input.int(10, "Max trades per day", minval=1, group=groupFlow)
+
+groupRisk  = "Risk Management"
+atrLen     = input.int(14,  "ATR Length", minval=2, group=groupRisk)
+atrSL      = input.float(2.0, "ATR Stop Loss Multiplier", minval=0.5, step=0.1, group=groupRisk)
+atrTS      = input.float(1.5, "ATR Trailing Stop Multiplier", minval=0.5, step=0.1, group=groupRisk)
+tp1R       = input.float(1.0, "Take Profit 1 (R multiple)", minval=0.2, step=0.1, group=groupRisk)
+tp2R       = input.float(2.0, "Take Profit 2 (R multiple)", minval=0.5, step=0.1, group=groupRisk)
+tp3R       = input.float(3.5, "Take Profit 3 (R multiple)", minval=1.0, step=0.1, group=groupRisk)
+useBE      = input.bool(true, "Move to Breakeven", group=groupRisk)
+beAfterR   = input.float(0.8, "Breakeven after R", minval=0.5, step=0.1, group=groupRisk)
+
+groupUI    = "Display Options"
+showLabels = input.bool(true, "Show Entry/Exit Labels", group=groupUI)
+showArrows = input.bool(true, "Show Signal Arrows", group=groupUI)
+showTable  = input.bool(true, "Show Performance Table", group=groupUI)
+showLevels = input.bool(true, "Show Support/Resistance Levels", group=groupUI)
+
+// ======= Advanced Preset Configuration =======
+var float _atrSL  = atrSL
+var float _atrTS  = atrTS
+var float _tp1R   = tp1R
+var float _tp2R   = tp2R
+var float _tp3R   = tp3R
+var float _adxMin = adxMin
+var int   _cd     = cooldown
+var bool  _useVol = useVolFlt
+var float _volMult = volMultiplier
+
+if barstate.isfirst
+    if freqPreset == "Conservative"
+        _adxMin := math.max(adxMin, 30)
+        _useVol := true
+        _volMult := 1.5
+        _atrSL  := 2.5
+        _atrTS  := 2.0
+        _tp1R   := 1.5
+        _tp2R   := 2.5
+        _tp3R   := 4.0
+        _cd     := 8
+    if freqPreset == "Balanced"
+        _adxMin := math.max(adxMin, 22)
+        _useVol := true
+        _volMult := 1.2
+        _atrSL  := 2.0
+        _atrTS  := 1.5
+        _tp1R   := 1.0
+        _tp2R   := 2.0
+        _tp3R   := 3.5
+        _cd     := 5
+    if freqPreset == "Aggressive"
+        _adxMin := math.max(18, adxMin)
+        _useVol := false
+        _volMult := 1.0
+        _atrSL  := 1.8
+        _atrTS  := 1.3
+        _tp1R   := 0.8
+        _tp2R   := 1.5
+        _tp3R   := 2.5
+        _cd     := 3
+    if freqPreset == "Scalp"
+        _adxMin := math.max(15, adxMin)
+        _useVol := false
+        _volMult := 1.0
+        _atrSL  := 1.5
+        _atrTS  := 1.2
+        _tp1R   := 0.6
+        _tp2R   := 1.2
+        _tp3R   := 2.0
+        _cd     := 2
+    if freqPreset == "Professional"
+        _adxMin := math.max(25, adxMin)
+        _useVol := true
+        _volMult := 1.3
+        _atrSL  := 2.2
+        _atrTS  := 1.8
+        _tp1R   := 1.2
+        _tp2R   := 2.2
+        _tp3R   := 3.8
+        _cd     := 6
+
+// ======= Advanced Technical Indicators =======
+// EMAs
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+emaLong = ta.ema(close, emaLongLen)
+emaVeryLong = ta.ema(close, emaVeryLong)
+
+// Higher Timeframe Analysis
+htfEMA200 = request.security(syminfo.tickerid, htf_tf, ta.ema(close, emaLongLen), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+htfEMA50 = request.security(syminfo.tickerid, htf_tf, ta.ema(close, 50), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+htfSlopeU = htfEMA200 - nz(htfEMA200[1]) > 0
+htfSlopeD = htfEMA200 - nz(htfEMA200[1]) < 0
+
+// Bollinger Bands
+basis  = ta.sma(close, bbLen)
+stdev  = ta.stdev(close, bbLen)
+bbU    = basis + bbMult * stdev
+bbL    = basis - bbMult * stdev
+bbM    = basis
+
+// RSI
+rsi = ta.rsi(close, rsiLen)
+
+// MACD
+[macdLine, signalLine, macdHist] = ta.macd(close, macdFast, macdSlow, macdSignal)
+
+// Stochastic
+k = ta.stoch(close, high, low, stochK)
+d = ta.sma(k, stochD)
+
+// Williams %R
+williamsR = ta.wpr(williamsLen)
+
+// ADX and DMI
+[plusDI, minusDI, adxVal] = ta.dmi(adxLen, adxLen)
+
+// Volume Analysis
+volSma = ta.sma(volume, volLen)
+volOK  = not _useVol or (volume > volSma * _volMult)
+
+// ATR for Risk Management
+atr = ta.atr(atrLen)
+
+// Support and Resistance Levels
+pivotHigh = ta.pivothigh(high, 5, 5)
+pivotLow = ta.pivotlow(low, 5, 5)
+var float resistance = na
+var float support = na
+if not na(pivotHigh)
+    resistance := pivotHigh
+if not na(pivotLow)
+    support := pivotLow
+
+// ======= Advanced Trend Analysis =======
+// Multi-timeframe trend
+upTrendSoft   = emaFast > emaSlow
+downTrendSoft = emaFast < emaSlow
+upTrendHard   = (close > emaLong) and upTrendSoft and htfSlopeU and (close > emaVeryLong)
+downTrendHard = (close < emaLong) and downTrendSoft and htfSlopeD and (close < emaVeryLong)
+
+// Trend strength
+trendStrength = math.abs(emaFast - emaSlow) / atr
+strongTrend = trendStrength > 0.5
+
+// ======= Advanced Signal Generation =======
+// Mean Reversion Signals
+mrLongBB = useMR and (low <= bbL) and (close > bbL)
+mrShortBB = useMR and (high >= bbU) and (close < bbU)
+mrLongRSI = useMR and ta.crossover(rsi, rsiOS) and (rsi < rsiOS + 5)
+mrShortRSI = useMR and ta.crossunder(rsi, rsiOB) and (rsi > rsiOB - 5)
+mrLongStoch = useMR and ta.crossover(k, stochOS) and (k < stochOS + 10)
+mrShortStoch = useMR and ta.crossunder(k, stochOB) and (k > stochOB - 10)
+mrLongWilliams = useMR and ta.crossover(williamsR, -80) and (williamsR < -75)
+mrShortWilliams = useMR and ta.crossunder(williamsR, -20) and (williamsR > -25)
+
+// Trend Following Signals
+tfLongEMA = useTF and ta.crossover(emaFast, emaSlow)
+tfShortEMA = useTF and ta.crossunder(emaFast, emaSlow)
+tfLongMACD = useTF and ta.crossover(macdLine, signalLine) and (macdLine < 0)
+tfShortMACD = useTF and ta.crossunder(macdLine, signalLine) and (macdLine > 0)
+
+// Combined Mean Reversion
+mrLong = mrLongBB and (mrLongRSI or mrLongStoch or mrLongWilliams)
+mrShort = mrShortBB and (mrShortRSI or mrShortStoch or mrShortWilliams)
+
+// Combined Trend Following
+tfLong = tfLongEMA and tfLongMACD
+tfShort = tfShortEMA and tfShortMACD
+
+// ======= Signal Filtering =======
+trendOKLong  = freqPreset == "Conservative" ? upTrendHard   : (freqPreset == "Professional" ? upTrendHard : upTrendSoft)
+trendOKShort = freqPreset == "Conservative" ? downTrendHard : (freqPreset == "Professional" ? downTrendHard : downTrendSoft)
+strengthOK   = (adxVal >= _adxMin) and volOK and strongTrend
+
+// Support/Resistance Filter
+srFilterLong = not showLevels or (close > support * 1.001) or na(support)
+srFilterShort = not showLevels or (close < resistance * 0.999) or na(resistance)
+
+longRaw  = strengthOK and trendOKLong and (mrLong or tfLong) and srFilterLong
+shortRaw = strengthOK and trendOKShort and (mrShort or tfShort) and srFilterShort
+
+// ======= Advanced Flow Control =======
+var int lastTradeBar = na
+var int tradesToday = 0
+var int lastDay = na
+
+// Reset daily trade counter
+if dayofweek != lastDay
+    tradesToday := 0
+    lastDay := dayofweek
+
+allowNow = na(lastTradeBar) or (bar_index - lastTradeBar >= _cd)
+allowDaily = tradesToday < maxTradesPerDay
+
+longSignal  = (dirOpt != "Shorts only") and longRaw and allowNow and allowDaily
+shortSignal = (dirOpt != "Longs only") and shortRaw and allowNow and allowDaily
+
+// ======= Risk Management =======
+riskPts = _atrSL * atr
+trailPts = _atrTS * atr
+
+// ======= Entry Logic =======
+if longSignal and strategy.position_size <= 0
+    if strategy.position_size < 0 and reenterOnFlip and alwaysIn
+        strategy.close("Short", comment="Flip to Long")
+    strategy.entry("Long", strategy.long)
+    lastTradeBar := bar_index
+    tradesToday := tradesToday + 1
+    if showLabels
+        label.new(bar_index, low, "LONG\n" + str.tostring(close, "#.##"), 
+                 style=label.style_label_up, textcolor=color.white, 
+                 color=color.new(color.green, 0), size=size.normal)
+
+if shortSignal and strategy.position_size >= 0
+    if strategy.position_size > 0 and reenterOnFlip and alwaysIn
+        strategy.close("Long", comment="Flip to Short")
+    strategy.entry("Short", strategy.short)
+    lastTradeBar := bar_index
+    tradesToday := tradesToday + 1
+    if showLabels
+        label.new(bar_index, high, "SHORT\n" + str.tostring(close, "#.##"), 
+                 style=label.style_label_down, textcolor=color.white, 
+                 color=color.new(color.red, 0), size=size.normal)
+
+// ======= Advanced Exit Management =======
+avg = strategy.position_avg_price
+isLong = strategy.position_size > 0
+isShort = strategy.position_size < 0
+
+var float longStop = na
+var float shortStop = na
+var float longTP1 = na
+var float longTP2 = na
+var float longTP3 = na
+var float shortTP1 = na
+var float shortTP2 = na
+var float shortTP3 = na
+
+// Long Position Management
+if isLong
+    longStop := avg - riskPts
+    longUnrealR = (close - avg) / riskPts
+    beStop = useBE and (longUnrealR >= beAfterR) ? avg : longStop
+    
+    // Trailing Stop
+    trailStop = useTrailing and (close - avg) > trailPts ? close - trailPts : longStop
+    finalStop = useTrailing ? math.max(beStop, trailStop) : beStop
+    
+    longTP1 := avg + _tp1R * riskPts
+    longTP2 := avg + _tp2R * riskPts
+    longTP3 := avg + _tp3R * riskPts
+    
+    strategy.exit("Exit Long TP1", from_entry="Long", limit=longTP1, stop=finalStop, qty_percent=33)
+    strategy.exit("Exit Long TP2", from_entry="Long", limit=longTP2, stop=finalStop, qty_percent=50)
+    strategy.exit("Exit Long TP3", from_entry="Long", limit=longTP3, stop=finalStop, qty_percent=100)
+else
+    longStop := na
+
+// Short Position Management
+if isShort
+    shortStop := avg + riskPts
+    shortUnrealR = (avg - close) / riskPts
+    beStopS = useBE and (shortUnrealR >= beAfterR) ? avg : shortStop
+    
+    // Trailing Stop
+    trailStopS = useTrailing and (avg - close) > trailPts ? close + trailPts : shortStop
+    finalStopS = useTrailing ? math.min(beStopS, trailStopS) : beStopS
+    
+    shortTP1 := avg - _tp1R * riskPts
+    shortTP2 := avg - _tp2R * riskPts
+    shortTP3 := avg - _tp3R * riskPts
+    
+    strategy.exit("Exit Short TP1", from_entry="Short", limit=shortTP1, stop=finalStopS, qty_percent=33)
+    strategy.exit("Exit Short TP2", from_entry="Short", limit=shortTP2, stop=finalStopS, qty_percent=50)
+    strategy.exit("Exit Short TP3", from_entry="Short", limit=shortTP3, stop=finalStopS, qty_percent=100)
+else
+    shortStop := na
+
+// ======= Visual Elements =======
+// Signal Arrows
+plotshape(showArrows and longSignal, title="Long Arrow", style=shape.triangleup, 
+         location=location.belowbar, size=size.small, color=color.new(color.green, 0))
+plotshape(showArrows and shortSignal, title="Short Arrow", style=shape.triangledown, 
+         location=location.abovebar, size=size.small, color=color.new(color.red, 0))
+
+// EMAs
+plot(emaFast, "EMA Fast", color=color.new(color.blue, 0), linewidth=2)
+plot(emaSlow, "EMA Slow", color=color.new(color.orange, 0), linewidth=2)
+plot(emaLong, "EMA Long", color=color.new(color.purple, 0), linewidth=1)
+plot(emaVeryLong, "EMA Very Long", color=color.new(color.gray, 30), linewidth=1)
+
+// Bollinger Bands
+plot(bbU, "BB Upper", color=color.new(color.yellow, 70), linewidth=1)
+plot(bbL, "BB Lower", color=color.new(color.yellow, 70), linewidth=1)
+plot(bbM, "BB Middle", color=color.new(color.yellow, 50), linewidth=1)
+
+// Support/Resistance Levels
+plot(showLevels and not na(resistance) ? resistance : na, "Resistance", 
+     color=color.new(color.red, 50), linewidth=2, style=plot.style_linebr)
+plot(showLevels and not na(support) ? support : na, "Support", 
+     color=color.new(color.green, 50), linewidth=2, style=plot.style_linebr)
+
+// Stop Loss and Take Profit Levels
+plot(isLong ? longStop : na, "Long Stop", color=color.new(color.red, 30), style=plot.style_linebr, linewidth=2)
+plot(isShort ? shortStop : na, "Short Stop", color=color.new(color.red, 30), style=plot.style_linebr, linewidth=2)
+
+plot(isLong ? longTP1 : na, "Long TP1", style=plot.style_circles, linewidth=1, color=color.new(color.green, 0))
+plot(isLong ? longTP2 : na, "Long TP2", style=plot.style_circles, linewidth=1, color=color.new(color.green, 0))
+plot(isLong ? longTP3 : na, "Long TP3", style=plot.style_circles, linewidth=1, color=color.new(color.green, 0))
+
+plot(isShort ? shortTP1 : na, "Short TP1", style=plot.style_circles, linewidth=1, color=color.new(color.red, 0))
+plot(isShort ? shortTP2 : na, "Short TP2", style=plot.style_circles, linewidth=1, color=color.new(color.red, 0))
+plot(isShort ? shortTP3 : na, "Short TP3", style=plot.style_circles, linewidth=1, color=color.new(color.red, 0))
+
+// ======= Advanced Performance Table =======
+var table t = na
+if showTable
+    if na(t)
+        t := table.new(position.top_right, 2, 8, frame_color=color.new(color.gray, 70), frame_width=1)
+    
+    wins = strategy.wintrades
+    loss = strategy.losstrades
+    trades = wins + loss
+    winRate = trades > 0 ? (wins / trades) * 100.0 : na
+    grossP = strategy.grossprofit
+    grossL = strategy.grossloss
+    pf = grossL != 0 ? math.abs(grossP / grossL) : na
+    maxDD = strategy.max_drawdown
+    avgWin = wins > 0 ? grossP / wins : na
+    avgLoss = loss > 0 ? grossL / loss : na
+    profitLossRatio = avgLoss != 0 and not na(avgLoss) ? avgWin / math.abs(avgLoss) : na
+    
+    table.cell(t, 0, 0, "Trades", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, str.tostring(trades), text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 1, "Win Rate %", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 1, str.tostring(winRate, "#.1"), text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 2, "Profit Factor", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 2, str.tostring(pf, "#.02"), text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 3, "Net Profit", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 3, str.tostring(strategy.netprofit, "#.0"), text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 4, "Max DD", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 4, str.tostring(maxDD, "#.0"), text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 5, "Avg Win", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 5, str.tostring(avgWin, "#.2"), text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 6, "Avg Loss", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 6, str.tostring(avgLoss, "#.2"), text_color=color.white, text_size=size.small)
+    table.cell(t, 0, 7, "P/L Ratio", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 7, str.tostring(profitLossRatio, "#.2"), text_color=color.white, text_size=size.small)
+
+// ======= Alerts =======
+alertcondition(longSignal, title="Long Signal", message="LONG signal detected at {{close}}")
+alertcondition(shortSignal, title="Short Signal", message="SHORT signal detected at {{close}}")
+alertcondition(longSignal and strategy.position_size < 0, title="Long Flip Signal", message="LONG flip signal detected at {{close}}")
+alertcondition(shortSignal and strategy.position_size > 0, title="Short Flip Signal", message="SHORT flip signal detected at {{close}}")
