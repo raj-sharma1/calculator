@@ -1,0 +1,506 @@
+//@version=6
+strategy("Elite Crypto Edge Pro - Multi-Timeframe Confluence Strategy",
+     overlay=true,
+     max_bars_back=5000,
+     initial_capital=10000,
+     commission_type=strategy.commission.percent, commission_value=0.06,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=15,
+     pyramiding=1, calc_on_every_tick=false, calc_on_order_fills=true)
+
+// ========================================
+// ELITE TRADING STRATEGY FRAMEWORK
+// ========================================
+// This strategy combines multiple advanced technical analysis concepts:
+// 1. Multi-timeframe trend analysis
+// 2. Market structure identification
+// 3. Momentum confluence scoring
+// 4. Dynamic volatility-based risk management
+// 5. Smart position sizing and exit management
+// 6. Advanced signal filtering and confirmation
+
+// ======= INPUT GROUPS =======
+groupGeneral = "🎯 General Settings"
+groupTrend = "📈 Trend & Market Structure"
+groupMomentum = "⚡ Momentum Indicators"
+groupVolume = "📊 Volume Analysis"
+groupRisk = "🛡️ Risk Management"
+groupAlerts = "🔔 Alerts & Notifications"
+groupUI = "🎨 Display Settings"
+
+// ======= GENERAL SETTINGS =======
+tradingMode = input.string("Both", "Trading Direction", options=["Both", "Long Only", "Short Only"], group=groupGeneral)
+strategyMode = input.string("Aggressive", "Strategy Mode", options=["Conservative", "Balanced", "Aggressive", "Scalp"], group=groupGeneral)
+alwaysInMarket = input.bool(true, "Always In Market (Flip Positions)", group=groupGeneral)
+minBarsEntry = input.int(3, "Minimum Bars Between Entries", minval=1, maxval=20, group=groupGeneral)
+
+// ======= TREND & MARKET STRUCTURE =======
+htfTimeframe = input.timeframe("4H", "Higher Timeframe for Trend", group=groupTrend)
+ema8Len = input.int(8, "EMA 8 (Fast)", minval=2, maxval=50, group=groupTrend)
+ema21Len = input.int(21, "EMA 21 (Medium)", minval=5, maxval=100, group=groupTrend)
+ema55Len = input.int(55, "EMA 55 (Slow)", minval=20, maxval=200, group=groupTrend)
+ema200Len = input.int(200, "EMA 200 (Trend Filter)", minval=50, maxval=500, group=groupTrend)
+enableStructure = input.bool(true, "Enable Market Structure Analysis", group=groupTrend)
+structureLookback = input.int(20, "Structure Lookback Period", minval=10, maxval=50, group=groupTrend)
+
+// ======= MOMENTUM INDICATORS =======
+rsiLength = input.int(14, "RSI Length", minval=2, maxval=50, group=groupMomentum)
+rsiOverbought = input.int(70, "RSI Overbought", minval=60, maxval=90, group=groupMomentum)
+rsiOversold = input.int(30, "RSI Oversold", minval=10, maxval=40, group=groupMomentum)
+
+macdFast = input.int(12, "MACD Fast", minval=5, maxval=50, group=groupMomentum)
+macdSlow = input.int(26, "MACD Slow", minval=10, maxval=100, group=groupMomentum)
+macdSignal = input.int(9, "MACD Signal", minval=3, maxval=30, group=groupMomentum)
+
+stochK = input.int(14, "Stochastic %K", minval=5, maxval=50, group=groupMomentum)
+stochD = input.int(3, "Stochastic %D", minval=1, maxval=10, group=groupMomentum)
+stochSmooth = input.int(3, "Stochastic Smooth", minval=1, maxval=10, group=groupMomentum)
+
+williamsLength = input.int(14, "Williams %R Length", minval=5, maxval=50, group=groupMomentum)
+cciLength = input.int(20, "CCI Length", minval=5, maxval=100, group=groupMomentum)
+
+// ======= VOLUME ANALYSIS =======
+enableVolumeFilter = input.bool(true, "Enable Volume Filter", group=groupVolume)
+volumeMALength = input.int(20, "Volume MA Length", minval=5, maxval=100, group=groupVolume)
+volumeMultiplier = input.float(1.5, "Volume Spike Multiplier", minval=1.0, maxval=5.0, step=0.1, group=groupVolume)
+enableVWAP = input.bool(true, "Enable VWAP Analysis", group=groupVolume)
+
+// ======= RISK MANAGEMENT =======
+atrLength = input.int(14, "ATR Length", minval=5, maxval=50, group=groupRisk)
+riskRewardRatio = input.float(2.0, "Risk:Reward Ratio", minval=1.0, maxval=5.0, step=0.1, group=groupRisk)
+stopLossATRMultiplier = input.float(1.5, "Stop Loss ATR Multiplier", minval=0.5, maxval=5.0, step=0.1, group=groupRisk)
+enableTrailingStop = input.bool(true, "Enable Trailing Stop", group=groupRisk)
+trailingStopATR = input.float(2.0, "Trailing Stop ATR Multiplier", minval=1.0, maxval=5.0, step=0.1, group=groupRisk)
+enableBreakeven = input.bool(true, "Move to Breakeven", group=groupRisk)
+breakevenRR = input.float(1.0, "Breakeven at R:R", minval=0.5, maxval=3.0, step=0.1, group=groupRisk)
+
+// Partial profit taking
+enablePartialTP = input.bool(true, "Enable Partial Take Profits", group=groupRisk)
+tp1Percent = input.int(50, "TP1 Position %", minval=10, maxval=90, group=groupRisk)
+tp1RR = input.float(1.0, "TP1 R:R Ratio", minval=0.5, maxval=3.0, step=0.1, group=groupRisk)
+tp2RR = input.float(2.0, "TP2 R:R Ratio", minval=1.0, maxval=5.0, step=0.1, group=groupRisk)
+
+// ======= ALERTS =======
+enableEntryAlerts = input.bool(true, "Enable Entry Alerts", group=groupAlerts)
+enableExitAlerts = input.bool(true, "Enable Exit Alerts", group=groupAlerts)
+enableStopLossAlerts = input.bool(true, "Enable Stop Loss Alerts", group=groupAlerts)
+
+// ======= UI SETTINGS =======
+showEMAs = input.bool(true, "Show EMAs", group=groupUI)
+showSignals = input.bool(true, "Show Entry Signals", group=groupUI)
+showLevels = input.bool(true, "Show TP/SL Levels", group=groupUI)
+showTable = input.bool(true, "Show Performance Table", group=groupUI)
+showConfluence = input.bool(true, "Show Confluence Score", group=groupUI)
+
+// ======= STRATEGY MODE ADJUSTMENTS =======
+var float dynamicStopMultiplier = stopLossATRMultiplier
+var float dynamicRR = riskRewardRatio
+var int dynamicMinBars = minBarsEntry
+var float confluenceThreshold = 0.6
+
+if barstate.isfirst
+    switch strategyMode
+        "Conservative" =>
+            dynamicStopMultiplier := 2.5
+            dynamicRR := 3.0
+            dynamicMinBars := 8
+            confluenceThreshold := 0.8
+        "Balanced" =>
+            dynamicStopMultiplier := 2.0
+            dynamicRR := 2.5
+            dynamicMinBars := 5
+            confluenceThreshold := 0.7
+        "Aggressive" =>
+            dynamicStopMultiplier := 1.5
+            dynamicRR := 2.0
+            dynamicMinBars := 3
+            confluenceThreshold := 0.6
+        "Scalp" =>
+            dynamicStopMultiplier := 1.2
+            dynamicRR := 1.5
+            dynamicMinBars := 1
+            confluenceThreshold := 0.5
+
+// ======= TECHNICAL INDICATORS =======
+
+// EMAs
+ema8 = ta.ema(close, ema8Len)
+ema21 = ta.ema(close, ema21Len)
+ema55 = ta.ema(close, ema55Len)
+ema200 = ta.ema(close, ema200Len)
+
+// Higher timeframe trend
+htfEMA21 = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, ema21Len), lookahead=barmerge.lookahead_off)
+htfEMA55 = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, ema55Len), lookahead=barmerge.lookahead_off)
+
+// RSI
+rsi = ta.rsi(close, rsiLength)
+
+// MACD
+[macdLine, signalLine, histLine] = ta.macd(close, macdFast, macdSlow, macdSignal)
+
+// Stochastic
+stochRSI_k = ta.stoch(rsi, rsi, rsi, stochK)
+stochRSI_d = ta.sma(stochRSI_k, stochD)
+
+// Williams %R
+williamsR = ta.wpr(williamsLength)
+
+// CCI
+cci = ta.cci(hlc3, cciLength)
+
+// ATR for volatility
+atr = ta.atr(atrLength)
+
+// Volume analysis
+volumeMA = ta.sma(volume, volumeMALength)
+volumeSpike = volume > (volumeMA * volumeMultiplier)
+vwap = ta.vwap(hlc3)
+
+// ======= MARKET STRUCTURE ANALYSIS =======
+// Higher highs and lower lows detection
+var float lastHigh = na
+var float lastLow = na
+var int lastHighBar = na
+var int lastLowBar = na
+
+if enableStructure
+    currentHigh = ta.highest(high, structureLookback)
+    currentLow = ta.lowest(low, structureLookback)
+    
+    if high == currentHigh and (na(lastHigh) or high > lastHigh)
+        lastHigh := high
+        lastHighBar := bar_index
+    
+    if low == currentLow and (na(lastLow) or low < lastLow)
+        lastLow := low
+        lastLowBar := bar_index
+
+// Trend structure
+higherHighs = na(lastHigh) ? false : (high > lastHigh and bar_index > lastHighBar)
+lowerLows = na(lastLow) ? false : (low < lastLow and bar_index > lastLowBar)
+uptrend = higherHighs and not lowerLows
+downtrend = lowerLows and not higherHighs
+
+// ======= CONFLUENCE SCORING SYSTEM =======
+// This creates a sophisticated scoring system for signal quality
+
+// Trend confluence (0-3 points)
+trendScore = 0.0
+if close > ema8 and ema8 > ema21 and ema21 > ema55
+    trendScore += 1.0
+if close > ema200
+    trendScore += 1.0
+if close > htfEMA21 and htfEMA21 > htfEMA55
+    trendScore += 1.0
+
+// Momentum confluence (0-4 points)
+momentumScore = 0.0
+if rsi > 50 and rsi < rsiOverbought
+    momentumScore += 1.0
+if macdLine > signalLine and histLine > histLine[1]
+    momentumScore += 1.0
+if stochRSI_k > 20 and stochRSI_k < 80
+    momentumScore += 1.0
+if williamsR > -80 and williamsR < -20
+    momentumScore += 1.0
+
+// Volume confluence (0-2 points)
+volumeScore = 0.0
+if not enableVolumeFilter or volume > volumeMA
+    volumeScore += 1.0
+if volumeSpike
+    volumeScore += 1.0
+
+// Structure confluence (0-1 point)
+structureScore = 0.0
+if enableStructure and uptrend
+    structureScore += 1.0
+
+// Calculate total confluence score (0-1 normalized)
+totalPoints = 10.0  // Maximum possible points
+longConfluence = (trendScore + momentumScore + volumeScore + structureScore) / totalPoints
+
+// Inverse scoring for shorts
+shortTrendScore = 0.0
+if close < ema8 and ema8 < ema21 and ema21 < ema55
+    shortTrendScore += 1.0
+if close < ema200
+    shortTrendScore += 1.0
+if close < htfEMA21 and htfEMA21 < htfEMA55
+    shortTrendScore += 1.0
+
+shortMomentumScore = 0.0
+if rsi < 50 and rsi > rsiOversold
+    shortMomentumScore += 1.0
+if macdLine < signalLine and histLine < histLine[1]
+    shortMomentumScore += 1.0
+if stochRSI_k < 80 and stochRSI_k > 20
+    shortMomentumScore += 1.0
+if williamsR < -20 and williamsR > -80
+    shortMomentumScore += 1.0
+
+shortStructureScore = 0.0
+if enableStructure and downtrend
+    shortStructureScore += 1.0
+
+shortConfluence = (shortTrendScore + shortMomentumScore + volumeScore + shortStructureScore) / totalPoints
+
+// ======= SIGNAL GENERATION =======
+
+// Entry conditions with confluence filtering
+longCondition = longConfluence >= confluenceThreshold and 
+                (tradingMode == "Both" or tradingMode == "Long Only") and
+                ta.crossover(ema8, ema21) and close > vwap
+
+shortCondition = shortConfluence >= confluenceThreshold and 
+                 (tradingMode == "Both" or tradingMode == "Short Only") and
+                 ta.crossunder(ema8, ema21) and close < vwap
+
+// Cooldown mechanism
+var int lastEntryBar = na
+cooldownOK = na(lastEntryBar) or (bar_index - lastEntryBar) >= dynamicMinBars
+
+// Final entry signals
+longEntry = longCondition and cooldownOK
+shortEntry = shortCondition and cooldownOK
+
+// ======= POSITION MANAGEMENT =======
+
+// Position tracking variables
+var float entryPrice = na
+var float stopLoss = na
+var float takeProfit1 = na
+var float takeProfit2 = na
+var bool tp1Hit = false
+var float trailingStopPrice = na
+
+// Risk calculation
+riskAmount = dynamicStopMultiplier * atr
+
+// Entry logic
+if longEntry and strategy.position_size <= 0
+    if strategy.position_size < 0 and alwaysInMarket
+        strategy.close("Short", comment="Flip to Long")
+    
+    entryPrice := close
+    stopLoss := close - riskAmount
+    takeProfit1 := close + (riskAmount * tp1RR)
+    takeProfit2 := close + (riskAmount * tp2RR)
+    tp1Hit := false
+    trailingStopPrice := stopLoss
+    
+    strategy.entry("Long", strategy.long, comment="Long Entry - Confluence: " + str.tostring(longConfluence, "#.##"))
+    lastEntryBar := bar_index
+    
+    if enableEntryAlerts
+        alert("🟢 LONG ENTRY SIGNAL\nPrice: " + str.tostring(close, "#.####") + 
+              "\nStop Loss: " + str.tostring(stopLoss, "#.####") + 
+              "\nTake Profit 1: " + str.tostring(takeProfit1, "#.####") + 
+              "\nTake Profit 2: " + str.tostring(takeProfit2, "#.####") + 
+              "\nConfluence Score: " + str.tostring(longConfluence, "#.##"), alert.freq_once_per_bar)
+
+if shortEntry and strategy.position_size >= 0
+    if strategy.position_size > 0 and alwaysInMarket
+        strategy.close("Long", comment="Flip to Short")
+    
+    entryPrice := close
+    stopLoss := close + riskAmount
+    takeProfit1 := close - (riskAmount * tp1RR)
+    takeProfit2 := close - (riskAmount * tp2RR)
+    tp1Hit := false
+    trailingStopPrice := stopLoss
+    
+    strategy.entry("Short", strategy.short, comment="Short Entry - Confluence: " + str.tostring(shortConfluence, "#.##"))
+    lastEntryBar := bar_index
+    
+    if enableEntryAlerts
+        alert("🔴 SHORT ENTRY SIGNAL\nPrice: " + str.tostring(close, "#.####") + 
+              "\nStop Loss: " + str.tostring(stopLoss, "#.####") + 
+              "\nTake Profit 1: " + str.tostring(takeProfit1, "#.####") + 
+              "\nTake Profit 2: " + str.tostring(takeProfit2, "#.####") + 
+              "\nConfluence Score: " + str.tostring(shortConfluence, "#.##"), alert.freq_once_per_bar)
+
+// ======= EXIT MANAGEMENT =======
+
+if strategy.position_size > 0  // Long position
+    // Breakeven management
+    if enableBreakeven and close >= entryPrice + (riskAmount * breakevenRR) and stopLoss < entryPrice
+        stopLoss := entryPrice
+        if enableExitAlerts
+            alert("🟡 Long position moved to breakeven", alert.freq_once_per_bar)
+    
+    // Trailing stop
+    if enableTrailingStop and close > entryPrice + (riskAmount * breakevenRR)
+        newTrailingStop = close - (trailingStopATR * atr)
+        if newTrailingStop > trailingStopPrice
+            trailingStopPrice := newTrailingStop
+            stopLoss := trailingStopPrice
+    
+    // Partial take profits
+    if enablePartialTP and not tp1Hit and close >= takeProfit1
+        strategy.close("Long", qty_percent=tp1Percent, comment="TP1 Hit")
+        tp1Hit := true
+        if enableExitAlerts
+            alert("🎯 Long TP1 Hit at " + str.tostring(close, "#.####"), alert.freq_once_per_bar)
+    
+    // Final exit conditions
+    strategy.exit("Long Exit", from_entry="Long", stop=stopLoss, limit=takeProfit2)
+
+if strategy.position_size < 0  // Short position
+    // Breakeven management
+    if enableBreakeven and close <= entryPrice - (riskAmount * breakevenRR) and stopLoss > entryPrice
+        stopLoss := entryPrice
+        if enableExitAlerts
+            alert("🟡 Short position moved to breakeven", alert.freq_once_per_bar)
+    
+    // Trailing stop
+    if enableTrailingStop and close < entryPrice - (riskAmount * breakevenRR)
+        newTrailingStop = close + (trailingStopATR * atr)
+        if newTrailingStop < trailingStopPrice
+            trailingStopPrice := newTrailingStop
+            stopLoss := trailingStopPrice
+    
+    // Partial take profits
+    if enablePartialTP and not tp1Hit and close <= takeProfit1
+        strategy.close("Short", qty_percent=tp1Percent, comment="TP1 Hit")
+        tp1Hit := true
+        if enableExitAlerts
+            alert("🎯 Short TP1 Hit at " + str.tostring(close, "#.####"), alert.freq_once_per_bar)
+    
+    // Final exit conditions
+    strategy.exit("Short Exit", from_entry="Short", stop=stopLoss, limit=takeProfit2)
+
+// ======= VISUAL ELEMENTS =======
+
+// EMA plots
+plot(showEMAs ? ema8 : na, "EMA 8", color=color.new(color.blue, 0), linewidth=2)
+plot(showEMAs ? ema21 : na, "EMA 21", color=color.new(color.orange, 0), linewidth=2)
+plot(showEMAs ? ema55 : na, "EMA 55", color=color.new(color.red, 0), linewidth=2)
+plot(showEMAs ? ema200 : na, "EMA 200", color=color.new(color.gray, 20), linewidth=3)
+
+// VWAP
+plot(enableVWAP ? vwap : na, "VWAP", color=color.new(color.purple, 30), linewidth=2)
+
+// Entry signals
+plotshape(showSignals and longEntry, title="Long Signal", style=shape.triangleup, 
+          location=location.belowbar, size=size.normal, color=color.new(color.green, 0))
+plotshape(showSignals and shortEntry, title="Short Signal", style=shape.triangledown, 
+          location=location.abovebar, size=size.normal, color=color.new(color.red, 0))
+
+// Support and resistance levels
+plot(showLevels and strategy.position_size > 0 ? stopLoss : na, "Long SL", 
+     color=color.new(color.red, 0), style=plot.style_linebr, linewidth=2)
+plot(showLevels and strategy.position_size > 0 ? takeProfit1 : na, "Long TP1", 
+     color=color.new(color.green, 0), style=plot.style_linebr, linewidth=1)
+plot(showLevels and strategy.position_size > 0 ? takeProfit2 : na, "Long TP2", 
+     color=color.new(color.green, 0), style=plot.style_linebr, linewidth=2)
+
+plot(showLevels and strategy.position_size < 0 ? stopLoss : na, "Short SL", 
+     color=color.new(color.red, 0), style=plot.style_linebr, linewidth=2)
+plot(showLevels and strategy.position_size < 0 ? takeProfit1 : na, "Short TP1", 
+     color=color.new(color.green, 0), style=plot.style_linebr, linewidth=1)
+plot(showLevels and strategy.position_size < 0 ? takeProfit2 : na, "Short TP2", 
+     color=color.new(color.green, 0), style=plot.style_linebr, linewidth=2)
+
+// ======= CONFLUENCE INDICATOR =======
+if showConfluence
+    confluenceColor = longConfluence >= confluenceThreshold ? color.new(color.green, 70) : 
+                      shortConfluence >= confluenceThreshold ? color.new(color.red, 70) : 
+                      color.new(color.gray, 80)
+    
+    bgcolor(confluenceColor, title="Confluence Background")
+
+// ======= PERFORMANCE TABLE =======
+var table performanceTable = na
+
+if showTable and barstate.islast
+    performanceTable := table.new(position.top_right, 2, 12, 
+                                  bgcolor=color.new(color.black, 80), 
+                                  border_width=1, 
+                                  border_color=color.new(color.gray, 50))
+    
+    // Calculate performance metrics
+    totalTrades = strategy.closedtrades
+    winningTrades = strategy.wintrades
+    losingTrades = strategy.losstrades
+    winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0
+    profitFactor = strategy.grossloss != 0 ? math.abs(strategy.grossprofit / strategy.grossloss) : 0
+    avgWin = winningTrades > 0 ? strategy.grossprofit / winningTrades : 0
+    avgLoss = losingTrades > 0 ? strategy.grossloss / losingTrades : 0
+    avgTrade = totalTrades > 0 ? strategy.netprofit / totalTrades : 0
+    maxDD = strategy.max_drawdown
+    sharpeRatio = totalTrades > 10 ? strategy.netprofit / math.max(1, math.sqrt(totalTrades) * avgTrade) : 0
+    
+    // Table headers and values
+    table.cell(performanceTable, 0, 0, "📊 ELITE PERFORMANCE", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.blue, 70))
+    table.cell(performanceTable, 1, 0, "", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.blue, 70))
+    
+    table.cell(performanceTable, 0, 1, "Strategy Mode", text_color=color.white, text_size=size.small)
+    table.cell(performanceTable, 1, 1, strategyMode, text_color=color.yellow, text_size=size.small)
+    
+    table.cell(performanceTable, 0, 2, "Total Trades", text_color=color.white, text_size=size.small)
+    table.cell(performanceTable, 1, 2, str.tostring(totalTrades), text_color=color.white, text_size=size.small)
+    
+    table.cell(performanceTable, 0, 3, "Win Rate %", text_color=color.white, text_size=size.small)
+    table.cell(performanceTable, 1, 3, str.tostring(winRate, "#.1") + "%", 
+               text_color=winRate >= 60 ? color.green : winRate >= 40 ? color.yellow : color.red, text_size=size.small)
+    
+    table.cell(performanceTable, 0, 4, "Profit Factor", text_color=color.white, text_size=size.small)
+    table.cell(performanceTable, 1, 4, str.tostring(profitFactor, "#.2"), 
+               text_color=profitFactor >= 2 ? color.green : profitFactor >= 1.2 ? color.yellow : color.red, text_size=size.small)
+    
+    table.cell(performanceTable, 0, 5, "Net Profit", text_color=color.white, text_size=size.small)
+    table.cell(performanceTable, 1, 5, str.tostring(strategy.netprofit, "#.0"), 
+               text_color=strategy.netprofit > 0 ? color.green : color.red, text_size=size.small)
+    
+    table.cell(performanceTable, 0, 6, "Avg Trade", text_color=color.white, text_size=size.small)
+    table.cell(performanceTable, 1, 6, str.tostring(avgTrade, "#.2"), 
+               text_color=avgTrade > 0 ? color.green : color.red, text_size=size.small)
+    
+    table.cell(performanceTable, 0, 7, "Max Drawdown", text_color=color.white, text_size=size.small)
+    table.cell(performanceTable, 1, 7, str.tostring(maxDD, "#.1") + "%", 
+               text_color=maxDD < 10 ? color.green : maxDD < 20 ? color.yellow : color.red, text_size=size.small)
+    
+    table.cell(performanceTable, 0, 8, "Sharpe Ratio", text_color=color.white, text_size=size.small)
+    table.cell(performanceTable, 1, 8, str.tostring(sharpeRatio, "#.2"), 
+               text_color=sharpeRatio > 1 ? color.green : sharpeRatio > 0.5 ? color.yellow : color.red, text_size=size.small)
+    
+    table.cell(performanceTable, 0, 9, "Long Confluence", text_color=color.white, text_size=size.small)
+    table.cell(performanceTable, 1, 9, str.tostring(longConfluence, "#.2"), 
+               text_color=longConfluence >= confluenceThreshold ? color.green : color.gray, text_size=size.small)
+    
+    table.cell(performanceTable, 0, 10, "Short Confluence", text_color=color.white, text_size=size.small)
+    table.cell(performanceTable, 1, 10, str.tostring(shortConfluence, "#.2"), 
+               text_color=shortConfluence >= confluenceThreshold ? color.red : color.gray, text_size=size.small)
+    
+    table.cell(performanceTable, 0, 11, "🎯 Signal Quality", text_color=color.white, text_size=size.small)
+    signalQuality = math.max(longConfluence, shortConfluence) >= confluenceThreshold ? "🟢 HIGH" : "🟡 MEDIUM"
+    table.cell(performanceTable, 1, 11, signalQuality, text_color=color.white, text_size=size.small)
+
+// ======= ALERT CONDITIONS =======
+// These can be used to set up TradingView alerts
+
+alertcondition(longEntry, title="Long Entry Alert", 
+               message="🟢 ELITE LONG SIGNAL\nSymbol: {{ticker}}\nPrice: {{close}}\nConfluence: " + str.tostring(longConfluence, "#.##"))
+
+alertcondition(shortEntry, title="Short Entry Alert", 
+               message="🔴 ELITE SHORT SIGNAL\nSymbol: {{ticker}}\nPrice: {{close}}\nConfluence: " + str.tostring(shortConfluence, "#.##"))
+
+alertcondition(strategy.position_size > 0 and close <= stopLoss, title="Long Stop Loss Alert", 
+               message="🛑 LONG STOP LOSS HIT\nSymbol: {{ticker}}\nPrice: {{close}}")
+
+alertcondition(strategy.position_size < 0 and close >= stopLoss, title="Short Stop Loss Alert", 
+               message="🛑 SHORT STOP LOSS HIT\nSymbol: {{ticker}}\nPrice: {{close}}")
+
+// ======= STRATEGY SUMMARY =======
+// This elite strategy combines:
+// 1. Multi-timeframe trend analysis for context
+// 2. Advanced confluence scoring system (10-point scale)
+// 3. Dynamic risk management with trailing stops
+// 4. Partial profit taking for optimal exits
+// 5. Market structure analysis for better entries
+// 6. Volume confirmation for signal quality
+// 7. Comprehensive alert system for automation
+// 8. Performance tracking with key metrics
+// 9. Adaptive parameters based on strategy mode
+// 10. Professional-grade position management
