@@ -1,0 +1,438 @@
+//@version=6
+strategy("Elite Crypto Strategy - Pro Edition",
+     overlay=true,
+     max_bars_back=5000,
+     initial_capital=10000,
+     commission_type=strategy.commission.percent, commission_value=0.06,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+     pyramiding=0, 
+     calc_on_every_tick=false, 
+     calc_on_order_fills=false)
+
+// ═══════════════════════════════════════════════════════════════════
+// INPUTS - Professional Configuration
+// ═══════════════════════════════════════════════════════════════════
+
+// === General Settings ===
+g_general = "═══ General Settings ═══"
+tradeDirection = input.string("Both", "Trade Direction", options=["Both", "Long Only", "Short Only"], group=g_general)
+minConfluence = input.int(3, "Minimum Confluence Score (out of 6)", minval=1, maxval=6, group=g_general, 
+     tooltip="Higher score = more selective entries. 3-4 is balanced, 5-6 is very conservative")
+
+// === Multi-Timeframe Trend ===
+g_trend = "═══ Trend Analysis ═══"
+htf1 = input.timeframe("60", "Higher Timeframe 1 (Trend)", group=g_trend)
+htf2 = input.timeframe("240", "Higher Timeframe 2 (Major Trend)", group=g_trend)
+ema_fast = input.int(9, "EMA Fast", minval=5, group=g_trend)
+ema_mid = input.int(21, "EMA Mid", minval=10, group=g_trend)
+ema_slow = input.int(55, "EMA Slow", minval=20, group=g_trend)
+ema_trend = input.int(200, "EMA Trend Filter", minval=50, group=g_trend)
+
+// === Momentum & Oscillators ===
+g_momentum = "═══ Momentum Indicators ═══"
+rsi_length = input.int(14, "RSI Length", minval=5, group=g_momentum)
+rsi_ob = input.int(65, "RSI Overbought", minval=55, maxval=80, group=g_momentum)
+rsi_os = input.int(35, "RSI Oversold", minval=20, maxval=45, group=g_momentum)
+macd_fast = input.int(12, "MACD Fast", minval=5, group=g_momentum)
+macd_slow = input.int(26, "MACD Slow", minval=10, group=g_momentum)
+macd_signal = input.int(9, "MACD Signal", minval=3, group=g_momentum)
+stoch_k = input.int(14, "Stochastic K", minval=5, group=g_momentum)
+stoch_d = input.int(3, "Stochastic D", minval=2, group=g_momentum)
+stoch_smooth = input.int(3, "Stochastic Smooth", minval=1, group=g_momentum)
+
+// === Volatility & Volume ===
+g_vol = "═══ Volatility & Volume ═══"
+atr_length = input.int(14, "ATR Length", minval=5, group=g_vol)
+bb_length = input.int(20, "Bollinger Bands Length", minval=10, group=g_vol)
+bb_mult = input.float(2.0, "BB Standard Deviation", minval=1.0, step=0.1, group=g_vol)
+adx_length = input.int(14, "ADX Length", minval=7, group=g_vol)
+adx_threshold = input.int(20, "ADX Threshold (Trend Strength)", minval=10, group=g_vol)
+volume_ma_len = input.int(20, "Volume MA Length", minval=5, group=g_vol)
+volume_mult = input.float(1.2, "Volume Spike Multiplier", minval=1.0, step=0.1, group=g_vol)
+
+// === Risk Management ===
+g_risk = "═══ Risk Management ═══"
+use_atr_sl = input.bool(true, "Use ATR-Based Stop Loss", group=g_risk)
+atr_sl_mult = input.float(2.0, "ATR Stop Loss Multiplier", minval=0.5, step=0.1, group=g_risk)
+use_structure_sl = input.bool(true, "Use Structure-Based Stop (Swing Highs/Lows)", group=g_risk)
+swing_lookback = input.int(10, "Swing Point Lookback", minval=3, group=g_risk)
+use_trailing_stop = input.bool(true, "Enable Trailing Stop", group=g_risk)
+trailing_atr_mult = input.float(2.5, "Trailing Stop ATR Multiplier", minval=1.0, step=0.1, group=g_risk)
+use_breakeven = input.bool(true, "Move to Breakeven", group=g_risk)
+breakeven_rr = input.float(1.0, "Breakeven at R:R", minval=0.5, step=0.1, group=g_risk)
+
+// === Take Profit Strategy ===
+g_tp = "═══ Take Profit Levels ═══"
+use_dynamic_tp = input.bool(true, "Use Dynamic TP (ATR-based)", group=g_tp)
+tp1_rr = input.float(1.5, "TP1 Risk:Reward Ratio", minval=0.5, step=0.1, group=g_tp)
+tp2_rr = input.float(2.5, "TP2 Risk:Reward Ratio", minval=1.0, step=0.1, group=g_tp)
+tp3_rr = input.float(4.0, "TP3 Risk:Reward Ratio", minval=2.0, step=0.5, group=g_tp)
+tp1_qty = input.int(30, "TP1 Quantity %", minval=10, maxval=50, group=g_tp)
+tp2_qty = input.int(30, "TP2 Quantity %", minval=10, maxval=50, group=g_tp)
+
+// === Exit Signals ===
+g_exit = "═══ Exit Conditions ═══"
+exit_on_opposite = input.bool(true, "Exit on Opposite Signal", group=g_exit)
+exit_on_rsi_extreme = input.bool(true, "Exit on RSI Extreme", group=g_exit)
+exit_on_macd_cross = input.bool(true, "Exit on MACD Counter-Trend Cross", group=g_exit)
+
+// === Visual Settings ===
+g_visual = "═══ Visual Settings ═══"
+show_signals = input.bool(true, "Show Entry/Exit Signals", group=g_visual)
+show_confluence = input.bool(true, "Show Confluence Labels", group=g_visual)
+show_levels = input.bool(true, "Show TP/SL Levels", group=g_visual)
+show_table = input.bool(true, "Show Strategy Stats", group=g_visual)
+
+// ═══════════════════════════════════════════════════════════════════
+// INDICATORS CALCULATION
+// ═══════════════════════════════════════════════════════════════════
+
+// === Moving Averages ===
+ema9 = ta.ema(close, ema_fast)
+ema21 = ta.ema(close, ema_mid)
+ema55 = ta.ema(close, ema_slow)
+ema200 = ta.ema(close, ema_trend)
+
+// Higher Timeframe EMAs
+htf1_ema200 = request.security(syminfo.tickerid, htf1, ta.ema(close, ema_trend), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+htf2_ema200 = request.security(syminfo.tickerid, htf2, ta.ema(close, ema_trend), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// === RSI ===
+rsi = ta.rsi(close, rsi_length)
+
+// === MACD ===
+[macd_line, signal_line, macd_hist] = ta.macd(close, macd_fast, macd_slow, macd_signal)
+
+// === Stochastic ===
+stoch_k_line = ta.sma(ta.stoch(close, high, low, stoch_k), stoch_smooth)
+stoch_d_line = ta.sma(stoch_k_line, stoch_d)
+
+// === ADX & DI ===
+[plus_di, minus_di, adx] = ta.dmi(adx_length, adx_length)
+
+// === Bollinger Bands ===
+bb_basis = ta.sma(close, bb_length)
+bb_dev = ta.stdev(close, bb_length)
+bb_upper = bb_basis + bb_mult * bb_dev
+bb_lower = bb_basis - bb_mult * bb_dev
+
+// === ATR ===
+atr = ta.atr(atr_length)
+
+// === Volume ===
+vol_ma = ta.sma(volume, volume_ma_len)
+volume_spike = volume > vol_ma * volume_mult
+
+// === Swing Highs/Lows for Structure ===
+swing_high = ta.highest(high, swing_lookback)
+swing_low = ta.lowest(low, swing_lookback)
+
+// ═══════════════════════════════════════════════════════════════════
+// TREND IDENTIFICATION
+// ═══════════════════════════════════════════════════════════════════
+
+// Current Timeframe Trend
+ctf_uptrend = (ema9 > ema21) and (ema21 > ema55) and (close > ema200)
+ctf_downtrend = (ema9 < ema21) and (ema21 < ema55) and (close < ema200)
+
+// HTF Trend Alignment
+htf1_uptrend = close > htf1_ema200
+htf1_downtrend = close < htf1_ema200
+htf2_uptrend = close > htf2_ema200
+htf2_downtrend = close < htf2_ema200
+
+// Strong Trend (ADX filter)
+strong_trend = adx > adx_threshold
+
+// ═══════════════════════════════════════════════════════════════════
+// CONFLUENCE SCORING SYSTEM (6 factors)
+// ═══════════════════════════════════════════════════════════════════
+
+// LONG Confluence Factors
+long_c1 = ctf_uptrend ? 1 : 0                                    // 1. Price above all EMAs
+long_c2 = (htf1_uptrend and htf2_uptrend) ? 1 : 0               // 2. HTF alignment
+long_c3 = (rsi > 50 and rsi < rsi_ob) ? 1 : 0                   // 3. RSI in bullish zone
+long_c4 = (macd_line > signal_line and macd_hist > 0) ? 1 : 0   // 4. MACD bullish
+long_c5 = (stoch_k_line > stoch_d_line and stoch_k_line < 80) ? 1 : 0  // 5. Stoch bullish
+long_c6 = (strong_trend and plus_di > minus_di) ? 1 : 0         // 6. ADX confirms uptrend
+
+long_confluence_score = long_c1 + long_c2 + long_c3 + long_c4 + long_c5 + long_c6
+
+// SHORT Confluence Factors
+short_c1 = ctf_downtrend ? 1 : 0                                  // 1. Price below all EMAs
+short_c2 = (htf1_downtrend and htf2_downtrend) ? 1 : 0           // 2. HTF alignment
+short_c3 = (rsi < 50 and rsi > rsi_os) ? 1 : 0                   // 3. RSI in bearish zone
+short_c4 = (macd_line < signal_line and macd_hist < 0) ? 1 : 0   // 4. MACD bearish
+short_c5 = (stoch_k_line < stoch_d_line and stoch_k_line > 20) ? 1 : 0  // 5. Stoch bearish
+short_c6 = (strong_trend and minus_di > plus_di) ? 1 : 0         // 6. ADX confirms downtrend
+
+short_confluence_score = short_c1 + short_c2 + short_c3 + short_c4 + short_c5 + short_c6
+
+// ═══════════════════════════════════════════════════════════════════
+// ENTRY TRIGGERS
+// ═══════════════════════════════════════════════════════════════════
+
+// Long Entry Triggers (requires pullback + momentum confirmation)
+long_pullback = (low <= ema21 or ta.crossover(close, ema21)) and close > ema55
+long_momentum_cross = ta.crossover(macd_line, signal_line)
+long_rsi_bounce = ta.crossover(rsi, rsi_os) or (rsi > rsi_os and rsi[1] <= rsi_os)
+long_stoch_cross = ta.crossover(stoch_k_line, stoch_d_line) and stoch_k_line < 50
+
+long_trigger = (long_pullback or long_momentum_cross or long_rsi_bounce or long_stoch_cross)
+
+// Short Entry Triggers (requires rejection + momentum confirmation)
+short_rejection = (high >= ema21 or ta.crossunder(close, ema21)) and close < ema55
+short_momentum_cross = ta.crossunder(macd_line, signal_line)
+short_rsi_reject = ta.crossunder(rsi, rsi_ob) or (rsi < rsi_ob and rsi[1] >= rsi_ob)
+short_stoch_cross = ta.crossunder(stoch_k_line, stoch_d_line) and stoch_k_line > 50
+
+short_trigger = (short_rejection or short_momentum_cross or short_rsi_reject or short_stoch_cross)
+
+// ═══════════════════════════════════════════════════════════════════
+// FINAL ENTRY CONDITIONS
+// ═══════════════════════════════════════════════════════════════════
+
+can_long = (tradeDirection == "Both" or tradeDirection == "Long Only")
+can_short = (tradeDirection == "Both" or tradeDirection == "Short Only")
+
+enter_long = can_long and long_trigger and (long_confluence_score >= minConfluence)
+enter_short = can_short and short_trigger and (short_confluence_score >= minConfluence)
+
+// ═══════════════════════════════════════════════════════════════════
+// RISK CALCULATION - DYNAMIC STOP LOSS
+// ═══════════════════════════════════════════════════════════════════
+
+var float entry_price = na
+var float stop_loss = na
+var float take_profit_1 = na
+var float take_profit_2 = na
+var float take_profit_3 = na
+var float risk_amount = na
+var bool in_long = false
+var bool in_short = false
+
+// Calculate Stop Loss
+calc_long_stop(entry) =>
+    atr_stop = entry - (atr * atr_sl_mult)
+    structure_stop = swing_low[1]
+    final_stop = use_structure_sl ? math.max(structure_stop, entry - (atr * (atr_sl_mult + 0.5))) : atr_stop
+    use_atr_sl ? math.max(atr_stop, structure_stop) : structure_stop
+
+calc_short_stop(entry) =>
+    atr_stop = entry + (atr * atr_sl_mult)
+    structure_stop = swing_high[1]
+    final_stop = use_structure_sl ? math.min(structure_stop, entry + (atr * (atr_sl_mult + 0.5))) : atr_stop
+    use_atr_sl ? math.min(atr_stop, structure_stop) : structure_stop
+
+// ═══════════════════════════════════════════════════════════════════
+// EXIT CONDITIONS
+// ═══════════════════════════════════════════════════════════════════
+
+// Exit Signals
+exit_long_signal = false
+exit_short_signal = false
+
+if in_long
+    // Exit conditions for longs
+    exit_long_rsi = exit_on_rsi_extreme and (rsi > 75 or ta.crossunder(rsi, rsi_ob))
+    exit_long_macd = exit_on_macd_cross and ta.crossunder(macd_line, signal_line)
+    exit_long_opposite = exit_on_opposite and short_confluence_score >= minConfluence
+    exit_long_signal := exit_long_rsi or exit_long_macd or exit_long_opposite
+
+if in_short
+    // Exit conditions for shorts
+    exit_short_rsi = exit_on_rsi_extreme and (rsi < 25 or ta.crossover(rsi, rsi_os))
+    exit_short_macd = exit_on_macd_cross and ta.crossover(macd_line, signal_line)
+    exit_short_opposite = exit_on_opposite and long_confluence_score >= minConfluence
+    exit_short_signal := exit_short_rsi or exit_short_macd or exit_short_opposite
+
+// ═══════════════════════════════════════════════════════════════════
+// STRATEGY EXECUTION
+// ═══════════════════════════════════════════════════════════════════
+
+// Enter Long
+if enter_long and strategy.position_size <= 0
+    entry_price := close
+    stop_loss := calc_long_stop(entry_price)
+    risk_amount := entry_price - stop_loss
+    
+    take_profit_1 := entry_price + (risk_amount * tp1_rr)
+    take_profit_2 := entry_price + (risk_amount * tp2_rr)
+    take_profit_3 := entry_price + (risk_amount * tp3_rr)
+    
+    strategy.entry("LONG", strategy.long, comment="LONG [" + str.tostring(long_confluence_score) + "/6]")
+    in_long := true
+    in_short := false
+    
+    if show_signals
+        label.new(bar_index, low, "🚀 LONG\nScore: " + str.tostring(long_confluence_score) + "/6", 
+             style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.normal)
+
+// Enter Short
+if enter_short and strategy.position_size >= 0
+    entry_price := close
+    stop_loss := calc_short_stop(entry_price)
+    risk_amount := stop_loss - entry_price
+    
+    take_profit_1 := entry_price - (risk_amount * tp1_rr)
+    take_profit_2 := entry_price - (risk_amount * tp2_rr)
+    take_profit_3 := entry_price - (risk_amount * tp3_rr)
+    
+    strategy.entry("SHORT", strategy.short, comment="SHORT [" + str.tostring(short_confluence_score) + "/6]")
+    in_long := false
+    in_short := true
+    
+    if show_signals
+        label.new(bar_index, high, "🔻 SHORT\nScore: " + str.tostring(short_confluence_score) + "/6", 
+             style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.normal)
+
+// Update position states
+if strategy.position_size == 0
+    in_long := false
+    in_short := false
+
+// Trailing Stop Logic
+var float trailing_stop = na
+
+if in_long and use_trailing_stop
+    current_trail = close - (atr * trailing_atr_mult)
+    trailing_stop := na(trailing_stop) ? current_trail : math.max(trailing_stop, current_trail)
+    
+    // Move to breakeven
+    if use_breakeven and close >= (entry_price + (risk_amount * breakeven_rr))
+        trailing_stop := math.max(trailing_stop, entry_price)
+
+if in_short and use_trailing_stop
+    current_trail = close + (atr * trailing_atr_mult)
+    trailing_stop := na(trailing_stop) ? current_trail : math.min(trailing_stop, current_trail)
+    
+    // Move to breakeven
+    if use_breakeven and close <= (entry_price - (risk_amount * breakeven_rr))
+        trailing_stop := math.min(trailing_stop, entry_price)
+
+// Exit Orders - LONG
+if in_long
+    effective_stop = use_trailing_stop ? trailing_stop : stop_loss
+    strategy.exit("TP1", "LONG", limit=take_profit_1, stop=effective_stop, qty_percent=tp1_qty, comment="TP1")
+    strategy.exit("TP2", "LONG", limit=take_profit_2, stop=effective_stop, qty_percent=tp2_qty, comment="TP2")
+    strategy.exit("TP3", "LONG", limit=take_profit_3, stop=effective_stop, qty_percent=100, comment="TP3")
+    
+    if exit_long_signal
+        strategy.close("LONG", comment="Exit Signal")
+        trailing_stop := na
+        if show_signals
+            label.new(bar_index, high, "❌ EXIT", style=label.style_label_down, color=color.new(color.orange, 20), textcolor=color.white)
+
+// Exit Orders - SHORT
+if in_short
+    effective_stop = use_trailing_stop ? trailing_stop : stop_loss
+    strategy.exit("TP1", "SHORT", limit=take_profit_1, stop=effective_stop, qty_percent=tp1_qty, comment="TP1")
+    strategy.exit("TP2", "SHORT", limit=take_profit_2, stop=effective_stop, qty_percent=tp2_qty, comment="TP2")
+    strategy.exit("TP3", "SHORT", limit=take_profit_3, stop=effective_stop, qty_percent=100, comment="TP3")
+    
+    if exit_short_signal
+        strategy.close("SHORT", comment="Exit Signal")
+        trailing_stop := na
+        if show_signals
+            label.new(bar_index, low, "❌ EXIT", style=label.style_label_up, color=color.new(color.orange, 20), textcolor=color.white)
+
+// Reset trailing stop when position closes
+if strategy.position_size == 0
+    trailing_stop := na
+
+// ═══════════════════════════════════════════════════════════════════
+// VISUAL PLOTS
+// ═══════════════════════════════════════════════════════════════════
+
+// EMAs
+plot(ema9, "EMA 9", color=color.new(color.aqua, 0), linewidth=1)
+plot(ema21, "EMA 21", color=color.new(color.orange, 0), linewidth=1)
+plot(ema55, "EMA 55", color=color.new(color.yellow, 0), linewidth=2)
+plot(ema200, "EMA 200", color=color.new(color.white, 0), linewidth=2)
+
+// Plot Levels
+plot(show_levels and in_long ? stop_loss : na, "Long SL", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=2)
+plot(show_levels and in_long ? take_profit_1 : na, "Long TP1", color=color.new(color.lime, 0), style=plot.style_linebr, linewidth=1)
+plot(show_levels and in_long ? take_profit_2 : na, "Long TP2", color=color.new(color.green, 0), style=plot.style_linebr, linewidth=1)
+plot(show_levels and in_long ? take_profit_3 : na, "Long TP3", color=color.new(color.teal, 0), style=plot.style_linebr, linewidth=1)
+
+plot(show_levels and in_short ? stop_loss : na, "Short SL", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=2)
+plot(show_levels and in_short ? take_profit_1 : na, "Short TP1", color=color.new(color.lime, 0), style=plot.style_linebr, linewidth=1)
+plot(show_levels and in_short ? take_profit_2 : na, "Short TP2", color=color.new(color.green, 0), style=plot.style_linebr, linewidth=1)
+plot(show_levels and in_short ? take_profit_3 : na, "Short TP3", color=color.new(color.teal, 0), style=plot.style_linebr, linewidth=1)
+
+// Trailing Stop
+plot(show_levels and use_trailing_stop and strategy.position_size != 0 ? trailing_stop : na, 
+     "Trailing Stop", color=color.new(color.purple, 0), style=plot.style_circles, linewidth=2)
+
+// Entry Price Line
+plot(show_levels and strategy.position_size != 0 ? entry_price : na, 
+     "Entry", color=color.new(color.blue, 50), style=plot.style_linebr, linewidth=1)
+
+// ═══════════════════════════════════════════════════════════════════
+// STATISTICS TABLE
+// ═══════════════════════════════════════════════════════════════════
+
+var table stats_table = na
+
+if show_table and barstate.islast
+    if na(stats_table)
+        stats_table := table.new(position.top_right, 2, 10, bgcolor=color.new(color.black, 80), 
+                                 frame_color=color.new(color.blue, 50), frame_width=2, border_width=1)
+    
+    win_rate = strategy.closedtrades > 0 ? (strategy.wintrades / strategy.closedtrades) * 100 : 0
+    profit_factor = strategy.grossloss != 0 ? math.abs(strategy.grossprofit / strategy.grossloss) : 0
+    avg_win = strategy.wintrades > 0 ? strategy.grossprofit / strategy.wintrades : 0
+    avg_loss = strategy.losstrades > 0 ? strategy.grossloss / strategy.losstrades : 0
+    avg_rr = avg_loss != 0 ? math.abs(avg_win / avg_loss) : 0
+    
+    // Header
+    table.cell(stats_table, 0, 0, "ELITE CRYPTO STRATEGY", text_color=color.white, bgcolor=color.new(color.blue, 50), 
+               text_size=size.normal, text_halign=text.align_center)
+    table.merge_cells(stats_table, 0, 0, 1, 0)
+    
+    // Stats
+    table.cell(stats_table, 0, 1, "Total Trades", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(stats_table, 1, 1, str.tostring(strategy.closedtrades), text_color=color.yellow, bgcolor=color.new(color.gray, 90))
+    
+    table.cell(stats_table, 0, 2, "Win Rate", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(stats_table, 1, 2, str.tostring(win_rate, "#.##") + "%", 
+               text_color=win_rate >= 50 ? color.lime : color.red, bgcolor=color.new(color.gray, 90))
+    
+    table.cell(stats_table, 0, 3, "Profit Factor", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(stats_table, 1, 3, str.tostring(profit_factor, "#.##"), 
+               text_color=profit_factor >= 1.5 ? color.lime : (profit_factor >= 1 ? color.yellow : color.red), 
+               bgcolor=color.new(color.gray, 90))
+    
+    table.cell(stats_table, 0, 4, "Avg R:R", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(stats_table, 1, 4, str.tostring(avg_rr, "#.##"), 
+               text_color=avg_rr >= 2 ? color.lime : color.yellow, bgcolor=color.new(color.gray, 90))
+    
+    table.cell(stats_table, 0, 5, "Net Profit", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(stats_table, 1, 5, "$" + str.tostring(strategy.netprofit, "#,###.##"), 
+               text_color=strategy.netprofit > 0 ? color.lime : color.red, bgcolor=color.new(color.gray, 90))
+    
+    table.cell(stats_table, 0, 6, "Max Drawdown", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(stats_table, 1, 6, "$" + str.tostring(strategy.max_drawdown, "#,###.##"), 
+               text_color=color.red, bgcolor=color.new(color.gray, 90))
+    
+    table.cell(stats_table, 0, 7, "Wins / Losses", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(stats_table, 1, 7, str.tostring(strategy.wintrades) + " / " + str.tostring(strategy.losstrades), 
+               text_color=color.white, bgcolor=color.new(color.gray, 90))
+    
+    table.cell(stats_table, 0, 8, "Avg Win / Loss", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(stats_table, 1, 8, "$" + str.tostring(avg_win, "#.##") + " / $" + str.tostring(math.abs(avg_loss), "#.##"), 
+               text_color=color.white, bgcolor=color.new(color.gray, 90))
+    
+    table.cell(stats_table, 0, 9, "Min Confluence", text_color=color.white, bgcolor=color.new(color.gray, 80))
+    table.cell(stats_table, 1, 9, str.tostring(minConfluence) + " / 6", 
+               text_color=color.aqua, bgcolor=color.new(color.gray, 90))
+
+// ═══════════════════════════════════════════════════════════════════
+// ALERTS
+// ═══════════════════════════════════════════════════════════════════
+
+alertcondition(enter_long, "🚀 LONG Signal", "LONG Entry - Confluence: {{plot_0}}/6 | Price: {{close}}")
+alertcondition(enter_short, "🔻 SHORT Signal", "SHORT Entry - Confluence: {{plot_1}}/6 | Price: {{close}}")
+alertcondition(exit_long_signal, "❌ Exit LONG", "Exit LONG signal triggered | Price: {{close}}")
+alertcondition(exit_short_signal, "❌ Exit SHORT", "Exit SHORT signal triggered | Price: {{close}}")
